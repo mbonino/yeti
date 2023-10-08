@@ -89,7 +89,11 @@ class Observable(BaseModel, database_arango.ObservableYetiConnector):
         return observable
 
     def tag(
-        self, tags: list[str], strict: bool = False, expiration_days: int | None = None
+        self,
+        tags: list[str],
+        strict: bool = False,
+        expiration_days: int | None = None,
+        fresh: bool = True
     ) -> "Observable":
         """Connects observable to tag graph."""
         expiration_days = expiration_days or DEFAULT_EXPIRATION_DAYS
