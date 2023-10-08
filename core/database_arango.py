@@ -289,11 +289,19 @@ class ArangoYetiConnector(AbstractYetiConnector):
 
     # TODO: Consider extracting this to its own class, given it's only meant
     # to be called by Observables.
-    def observable_tag(self, tag_name: str) -> "TagRelationship":
+    def observable_tag(
+        self,
+        tag_name: str,
+        fresh: bool = True,
+        first_seen: datetime.datetime | None = None,
+        last_seen: datetime.datetime | None = None) -> "TagRelationship":
         """Links an Observable to a Tag object.
 
         Args:
           tag_name: The name of the tag to link to.
+          fresh: Applies to newly tagged objects only. Defaults to true, but can be
+              specified if necessary.
+          last_seen: Applies to newly tagged objects only.
         """
         # Import at runtime to avoid circular dependency.
         from core.schemas.graph import TagRelationship
@@ -316,15 +324,16 @@ class ArangoYetiConnector(AbstractYetiConnector):
         # Relationship doesn't exist, check if tag is already in the db
         tag_obj = Tag.find(name=tag_name)
         if not tag_obj:
-            tag_obj = Tag(name=tag_name).save()
+            tag_obj = Tag(name=tag_name)
         tag_obj.count += 1
-        tag_obj.save()
+        tag_obj = tag_obj.save()
 
         tag_relationship = TagRelationship(
             source=self.extended_id,
             target=tag_obj.extended_id,
-            last_seen=datetime.datetime.now(datetime.timezone.utc),
-            fresh=True,
+            first_seen=first_seen or datetime.datetime.now(datetime.timezone.utc),
+            last_seen=last_seen or datetime.datetime.now(datetime.timezone.utc),
+            fresh=fresh,
         )
 
         result = graph.edge_collection("tagged").link(
@@ -374,7 +383,12 @@ class ArangoYetiConnector(AbstractYetiConnector):
             graph.edge_collection("tagged").delete(edge["_id"])
 
     def link_to(
-        self, target: TYetiObject, relationship_type: str, description: str
+        self,
+        target: TYetiObject,
+        relationship_type: str,
+        description: str,
+        created: datetime.datetime | None = None,
+        modified: datetime.datetime | None = None,
     ) -> "Relationship":
         """Creates a link between two YetiObjects.
 
@@ -415,8 +429,8 @@ class ArangoYetiConnector(AbstractYetiConnector):
             source=self.extended_id,
             target=target.extended_id,
             description=description,
-            created=datetime.datetime.now(datetime.timezone.utc),
-            modified=datetime.datetime.now(datetime.timezone.utc),
+            created=created or datetime.datetime.now(datetime.timezone.utc),
+            modified=modified or datetime.datetime.now(datetime.timezone.utc),
         )
         result = graph.edge_collection("links").link(
             relationship.source,
@@ -478,8 +492,10 @@ class ArangoYetiConnector(AbstractYetiConnector):
           raw: Whether to return a raw dictionary or a Yeti object.
 
         Returns:
-          A tuple of two lists: the first one contains the neighbors (vertices),
-            the second one contains the relationships (edges)
+          A three-tuple:
+            0: neighbors (vertices)
+            1: relationships (edges)
+            2: total number of neighbors
         """
         query_filter = ""
         args = {
