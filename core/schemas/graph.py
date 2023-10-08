@@ -1,10 +1,10 @@
 import datetime
 from typing import ClassVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core import database_arango
-
+from core.helpers import now
 
 # Database model
 class Relationship(BaseModel, database_arango.ArangoYetiConnector):
@@ -30,6 +30,7 @@ class TagRelationship(BaseModel, database_arango.ArangoYetiConnector):
     id: str | None = None
     source: str
     target: str
+    first_seen: datetime.datetime = Field(default_factory=now)
     last_seen: datetime.datetime
     fresh: bool
 

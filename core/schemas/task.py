@@ -16,10 +16,7 @@ from core import database_arango
 from core.config.config import yeti_config
 from core.schemas.observable import Observable, ObservableType
 from core.schemas.template import Template
-
-
-def now():
-    return datetime.datetime.now(datetime.timezone.utc)
+from core.helpers import now
 
 
 class TaskStatus(str, Enum):
