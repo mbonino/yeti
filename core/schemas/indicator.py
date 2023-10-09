@@ -109,7 +109,7 @@ class Yara(Indicator):
     type: Literal["yara"] = IndicatorType.yara
 
     def match(self, value: str) -> IndicatorMatch | None:
-        raise NotImplementedError
+        return None
 
 
 class Sigma(Indicator):
@@ -122,7 +122,7 @@ class Sigma(Indicator):
     type: Literal["sigma"] = IndicatorType.sigma
 
     def match(self, value: str) -> IndicatorMatch | None:
-        raise NotImplementedError
+        return None
 
 
 TYPE_MAPPING = {

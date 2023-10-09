@@ -136,15 +136,15 @@ class Observable(BaseModel, database_arango.ObservableYetiConnector):
     ) -> "Observable":
         """Adds context to an observable."""
         compare_fields = set(context.keys()) - skip_compare - {"source"}
-        comparable_dict = {context[k] for k in compare_fields}
-        for db_context in list(self.context):
+        comparable_dict = {k: context[k] for k in compare_fields}
+        for db_context in self.context:
             if db_context["source"] != source:
                 continue
 
-            comparable_db_dict = {db_context.get(k) for k in compare_fields}
-            if comparable_dict == comparable_db_dict:
-                db_context.update(context)
-                return self.save()
+            for key in compare_fields:
+                if db_context.get(key) != comparable_dict[key]:
+                    db_context.update(context)
+                    return self.save()
         else:
             context["source"] = source
             self.context.append(context)
