@@ -80,7 +80,7 @@ class DomainToolsApi(object):
         }
         params.update(_params)
 
-        s = requests.Session(proxies=yeti_config.proxy)
+        s = requests.Session(proxies=yeti_config.get('proxy'))
         s.mount("https://", TlsAdapter())
         r = s.get(DomainToolsApi.API_URL + uri, params=params)
         r = r.json()
@@ -298,7 +298,5 @@ class DTWhois(OneShotAnalytics, DomainToolsApi):
                 observable.add_context(context)
             else:
                 observable.save()
-
-            print(links)
 
         return links

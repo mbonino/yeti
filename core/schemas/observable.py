@@ -1,43 +1,42 @@
 # TODO Observable value normalization
 
 import datetime
+import re
 from enum import Enum
-from typing import Literal, Optional, ClassVar
+from typing import ClassVar, Literal
 
-from pydantic import BaseModel, Field
 import validators
+from pydantic import BaseModel, Field
+
 from core import database_arango
-from core.helpers import refang
-from core.schemas.entity import Entity
-from core.schemas.tag import DEFAULT_EXPIRATION_DAYS, Tag
+from core.helpers import now, refang
 from core.schemas.graph import TagRelationship
-from core.helpers import now
 
 
 # Data Schema
 class ObservableType(str, Enum):
-    ipv4 = "ipv4"
-    ipv6 = "ipv6"
-    hostname = "hostname"
-    url = "url"
-    observable = "observable"
-    guess = "guess"
+    asn = "asn"
+    bitcoin_wallet = "bitcoin_wallet"
+    certificate = "certificate"
+    cidr = "cidr"
+    command_line = "command_line"
     email = "email"
     file = "file"
-    sha256 = "sha256"
-    sha1 = "sha1"
-    md5 = "md5"
-    asn = "asn"
-    cidr = "cidr"
-    certificate = "certificate"
-    bitcoin_wallet = "bitcoin_wallet"
-    path = "path"
-    mac_address = "mac_address"
-    command_line = "command_line"
-    registry_key = "registry_key"
+    guess = "guess"
+    hostname = "hostname"
     imphash = "imphash"
-    tlsh = "tlsh"
+    ipv4 = "ipv4"
+    ipv6 = "ipv6"
+    mac_address = "mac_address"
+    md5 = "md5"
+    observable = "observable"
+    path = "path"
+    registry_key = "registry_key"
+    sha1 = "sha1"
+    sha256 = "sha256"
     ssdeep = "ssdeep"
+    tlsh = "tlsh"
+    url = "url"
 
 
 class Observable(BaseModel, database_arango.ObservableYetiConnector):
@@ -88,49 +87,6 @@ class Observable(BaseModel, database_arango.ObservableYetiConnector):
             observable = observable.tag(tags)
         return observable
 
-    def tag(
-        self,
-        tags: list[str],
-        strict: bool = False,
-        expiration_days: int | None = None,
-        fresh: bool = True
-    ) -> "Observable":
-        """Connects observable to tag graph."""
-        expiration_days = expiration_days or DEFAULT_EXPIRATION_DAYS
-
-        if strict:
-            self.observable_clear_tags()
-
-        extra_tags = set()
-        for tag_name in tags:
-            # Attempt to find replacement tag
-            replacements, _ = Tag.filter({"in__replaces": [tag_name]}, count=1)
-            tag: Optional[Tag] = None
-
-            if replacements:
-                tag = replacements[0]
-            # Attempt to find actual tag
-            else:
-                tag = Tag.find(name=tag_name)
-            # Create tag
-            if not tag:
-                tag = Tag(name=tag_name).save()
-
-            tag_link = self.observable_tag(tag.name)
-            self.tags[tag.name] = tag_link
-
-            extra_tags |= set(tag.produces)
-
-            relevant_entities, _ = Entity.filter(args={"relevant_tags": [tag.name]})
-            for entity in relevant_entities:
-                self.link_to(entity, "tags", "Tagged")
-
-        extra_tags -= set(tags)
-        if extra_tags:
-            self.tag(list(extra_tags))
-
-        return self
-
     def add_context(
         self, source: str, context: dict, skip_compare: set = set()
     ) -> "Observable":
@@ -179,50 +135,47 @@ TYPE_VALIDATOR_MAP = {
     ObservableType.email: validators.email,
 }
 
-REGEXES_OBSERVABLES = {}
+REGEXES_OBSERVABLES = {
+    # Unix
+    ObservableType.path : [
+        re.compile(r"^(\/[^\/\0]+)+$"),
+        re.compile(r"^(?:[a-zA-Z]\:|\\\\[\w\.]+\\[\w.$]+)\\(?:[\w]+\\)*\w([\w.])+")
+    ]
+}
 
 
 def validate_observable(obs: Observable) -> bool:
     if obs.type in TYPE_VALIDATOR_MAP:
-        return TYPE_VALIDATOR_MAP[obs.type](obs.value)
+        return TYPE_VALIDATOR_MAP[obs.type](obs.value) is True
     elif obs.type in dict(REGEXES_OBSERVABLES):
-        return dict(REGEXES_OBSERVABLES)[obs.type].match(obs.value)
+        for regex in REGEXES_OBSERVABLES[obs.type]:
+            if regex.match(obs.value):
+                return True
+        return False
     else:
         return False
 
 
 def find_type(value: str) -> ObservableType | None:
-    for obs_type in TYPE_VALIDATOR_MAP:
-        if TYPE_VALIDATOR_MAP[obs_type](value):
+    for obs_type, validator in TYPE_VALIDATOR_MAP.items():
+        if validator(value):
             return obs_type
-    for type_obs, regex in REGEXES_OBSERVABLES.items():
-        if regex.match(value):
-            return type_obs
+    for obs_type, regexes in REGEXES_OBSERVABLES.items():
+        for regex in regexes:
+            if regex.match(value):
+                return obs_type
     return None
 
 
 TYPE_MAPPING = {
-    "ip": Observable,
-    "hostname": Observable,
-    "url": Observable,
-    "observables": Observable,
-    "observable": Observable,
-    "file": Observable,
-    "sha256": Observable,
-    "sha1": Observable,
-    "md5": Observable,
-    "asn": Observable,
-    "cidr": Observable,
-    "email": Observable,
-    "command_line": Observable,
-    "bitcoin_wallet": Observable,
-    "certificate": Observable,
-    "imphash": Observable,
-    "ipv4": Observable,
-    "ipv6": Observable,
-    "mac_adress": Observable,
-    "path": Observable,
-    "registry_key": Observable,
-    "ssdeep": Observable,
-    "tlsh": Observable,
+    'observable': Observable,
+    'observables': Observable
 }
+
+# Import all observable types, as these register themselves in the TYPE_MAPPING
+# disable: pylint=wrong-import-position
+from core.schemas.observables import (asn, bitcoin_wallet, certificate, cidr,
+                                      command_line, email, file, hostname,
+                                      imphash, ipv4, ipv6, mac_address, md5,
+                                      path, registry_key, sha1, sha256, ssdeep,
+                                      tlsh, url)

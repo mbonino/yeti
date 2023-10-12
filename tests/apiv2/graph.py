@@ -1,14 +1,12 @@
-import datetime
 import unittest
 
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from core import database_arango
 from core.schemas.entity import ThreatActor
 from core.schemas.graph import Relationship
 from core.schemas.indicator import Regex
-from core.schemas.observables import ipv4, hostname, url
+from core.schemas.observables import hostname, ipv4, url
 from core.web import webapp
 
 client = TestClient(webapp.app)
@@ -32,14 +30,14 @@ class SimpleGraphTest(unittest.TestCase):
             "/api/v2/graph/search",
             json={
                 "source": self.observable1.extended_id,
-                "link_type": "resolves",
                 "hops": 1,
+                "graph": "links",
                 "direction": "any",
                 "include_original": False,
             },
         )
-        self.assertEqual(response.status_code, 200)
         data = response.json()
+        self.assertEqual(response.status_code, 200, data)
         self.assertEqual(len(data["vertices"]), 1)
         neighbor = data["vertices"][self.observable2.extended_id]
         self.assertEqual(neighbor["value"], "127.0.0.1")
@@ -51,6 +49,27 @@ class SimpleGraphTest(unittest.TestCase):
         self.assertEqual(edges[0]["target"], self.observable2.extended_id)
         self.assertEqual(edges[0]["type"], "resolves")
 
+    def test_get_neighbors_tag(self):
+        self.entity1.tag(['hacker1'])
+        self.observable1.tag(['hacker1'])
+
+        response = client.post(
+            "/api/v2/graph/search",
+            json={
+                "source": self.observable1.extended_id,
+                "hops": 2,
+                "graph": "tagged",
+                "direction": "any",
+                "include_original": False,
+            },
+        )
+        data = response.json()
+        self.assertEqual(response.status_code, 200, data)
+        self.assertEqual(len(data["vertices"]), 2)
+        self.assertEqual(data["total"], 2)
+
+        self.assertIn(self.entity1.extended_id, data["vertices"])
+
     def test_neighbors_go_both_ways(self):
         self.relationship = self.observable1.link_to(
             self.observable2, "resolves", "DNS resolution"
@@ -60,8 +79,8 @@ class SimpleGraphTest(unittest.TestCase):
             "/api/v2/graph/search",
             json={
                 "source": self.observable2.extended_id,
-                "link_type": "resolves",
                 "hops": 1,
+                "graph": "links",
                 "direction": "any",
                 "include_original": False,
             },
@@ -77,14 +96,14 @@ class SimpleGraphTest(unittest.TestCase):
             "/api/v2/graph/search",
             json={
                 "source": self.observable1.extended_id,
-                "link_type": "resolves",
                 "hops": 1,
+                "graph": "links",
                 "direction": "any",
                 "include_original": False,
             },
         )
-        self.assertEqual(response.status_code, 200)
         data = response.json()
+        self.assertEqual(response.status_code, 200, data)
         self.assertEqual(len(data["vertices"]), 1)
         neighbor = data["vertices"][self.observable2.extended_id]
         self.assertEqual(neighbor["value"], "127.0.0.1")

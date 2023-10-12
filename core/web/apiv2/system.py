@@ -1,7 +1,6 @@
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
-from core.schemas.template import Template
 from core.config.config import yeti_config
 
 # API endpoints
@@ -10,22 +9,23 @@ router = APIRouter()
 
 class SystemConfig(BaseModel):
     """System config template."""
+    model_config = ConfigDict(extra='forbid')
 
     auth: dict
     arangodb: dict
     redis: dict
     proxy: dict
-    logging: dict
+    system: dict
 
 
 @router.get("/config")
 async def get_config() -> SystemConfig:
     """Gets the system config."""
     config = SystemConfig(
-        auth=yeti_config.auth,
-        arangodb=yeti_config.arangodb,
-        redis=yeti_config.redis,
-        proxy=yeti_config.proxy,
-        logging=yeti_config.logging,
+        auth=yeti_config.get('auth'),
+        arangodb=yeti_config.get('arangodb'),
+        redis=yeti_config.get('redis'),
+        proxy=yeti_config.get('proxy'),
+        system=yeti_config.get('system'),
     )
     return config

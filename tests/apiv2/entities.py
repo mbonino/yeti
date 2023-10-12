@@ -1,16 +1,15 @@
-from core import database_arango
-import datetime
-
-from fastapi.testclient import TestClient
 import unittest
 
+from fastapi.testclient import TestClient
+
+from core import database_arango
 from core.schemas import entity
 from core.web import webapp
 
 client = TestClient(webapp.app)
 
 
-class ObservableTest(unittest.TestCase):
+class EntityTest(unittest.TestCase):
     def setUp(self) -> None:
         database_arango.db.clear()
         self.entity1 = entity.ThreatActor(name="ta1").save()
@@ -48,3 +47,14 @@ class ObservableTest(unittest.TestCase):
         self.assertEqual(len(data["entities"]), 1)
         self.assertEqual(data["entities"][0]["name"], "ta1")
         self.assertEqual(data["entities"][0]["type"], "threat-actor")
+
+    def test_tag_entity(self):
+        """Tests that an entity gets tagged and tags are generated."""
+        response = client.post(
+            "/api/v2/entities/tag",
+            json={"ids": [self.entity1.id], "tags": ["hacker"]},
+        )
+        data = response.json()
+        self.assertEqual(response.status_code, 200, data)
+        self.assertEqual(data["tagged"], 1)
+        self.assertIn("hacker", data["tags"][self.entity1.extended_id], data)

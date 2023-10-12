@@ -1,26 +1,29 @@
 import datetime
 import re
 from enum import Enum
-from typing import ClassVar, Literal, Type
+from typing import ClassVar, Literal, Optional, Type
+import unicodedata
 
 from pydantic import BaseModel, Field
 
 from core import database_arango
 from core.helpers import now
-
+from core.schemas.graph import TagRelationship
+from core.schemas.tag import Tag
 
 class EntityType(str, Enum):
-    threat_actor = "threat-actor"
-    intrusion_set = "intrusion-set"
-    tool = "tool"
-    malware = "malware"
-    campaign = "campaign"
     attack_pattern = "attack-pattern"
-    identity = "identity"
-    exploit = "exploit"
+    campaign = "campaign"
     company = "company"
-    phone = "phone"
+    exploit = "exploit"
+    identity = "identity"
+    intrusion_set = "intrusion-set"
+    investigation = "investigation"
+    malware = "malware"
     note = "note"
+    phone = "phone"
+    threat_actor = "threat-actor"
+    tool = "tool"
 
 
 class Entity(BaseModel, database_arango.ArangoYetiConnector):
@@ -34,7 +37,7 @@ class Entity(BaseModel, database_arango.ArangoYetiConnector):
     description: str = ""
     created: datetime.datetime = Field(default_factory=now)
     modified: datetime.datetime = Field(default_factory=now)
-    relevant_tags: list[str] = []
+    tags: dict[str, TagRelationship] = {}
 
     @classmethod
     def load(cls, object: dict) -> "EntityTypes":
@@ -42,32 +45,31 @@ class Entity(BaseModel, database_arango.ArangoYetiConnector):
             return TYPE_MAPPING[object["type"]](**object)
         raise ValueError("Attempted to instantiate an undefined entity type.")
 
-
 class Note(Entity):
-    type: Literal["note"] = EntityType.note
+    type: Literal[EntityType.note] = EntityType.note
     _type_filter: ClassVar[str] = EntityType.note
 
 
 class Phone(Entity):
     _type_filter: ClassVar[str] = EntityType.phone
-    type: Literal["phone"] = EntityType.phone
+    type: Literal[EntityType.phone] = EntityType.phone
 
 
 class Company(Entity):
-    type: Literal["company"] = EntityType.company
+    type: Literal[EntityType.company] = EntityType.company
     _type_filter: ClassVar[str] = EntityType.company
 
 
 class ThreatActor(Entity):
     _type_filter: ClassVar[str] = EntityType.threat_actor
-    type: Literal["threat-actor"] = EntityType.threat_actor
+    type: Literal[EntityType.threat_actor] = EntityType.threat_actor
 
     aliases: list[str] = []
 
 
 class IntrusionSet(Entity):
     _type_filter: ClassVar[str] = EntityType.intrusion_set
-    type: Literal["intrusion-set"] = EntityType.intrusion_set
+    type: Literal[EntityType.intrusion_set] = EntityType.intrusion_set
 
     aliases: list[str] = []
     first_seen: datetime.datetime = Field(default_factory=now)
@@ -76,7 +78,7 @@ class IntrusionSet(Entity):
 
 class Tool(Entity):
     _type_filter: ClassVar[str] = EntityType.tool
-    type: Literal["tool"] = EntityType.tool
+    type: Literal[EntityType.tool] = EntityType.tool
 
     kill_chain_phases: list[str] = []
     tool_version: str = ""
@@ -84,14 +86,14 @@ class Tool(Entity):
 
 class AttackPattern(Entity):
     _type_filter: ClassVar[str] = EntityType.attack_pattern
-    type: Literal["attack-pattern"] = EntityType.attack_pattern
+    type: Literal[EntityType.attack_pattern] = EntityType.attack_pattern
 
     kill_chain_phases: list[str] = []
 
 
 class Malware(Entity):
     _type_filter: ClassVar[str] = EntityType.malware
-    type: Literal["malware"] = EntityType.malware
+    type: Literal[EntityType.malware] = EntityType.malware
 
     kill_chain_phases: list[str] = []
     aliases: list[str] = []
@@ -100,7 +102,7 @@ class Malware(Entity):
 
 class Campaign(Entity):
     _type_filter: ClassVar[str] = EntityType.campaign
-    type: Literal["campaign"] = EntityType.campaign
+    type: Literal[EntityType.campaign] = EntityType.campaign
 
     aliases: list[str] = []
     first_seen: datetime.datetime = Field(default_factory=now)
@@ -109,59 +111,69 @@ class Campaign(Entity):
 
 class Identity(Entity):
     _type_filter: ClassVar[str] = EntityType.identity
-    type: Literal["identity"] = EntityType.identity
+    type: Literal[EntityType.identity] = EntityType.identity
 
     identity_class: list[str] = []
     sectors: list[str] = []
     contact_information: str = ""
 
 
-TYPE_MAPPING: dict[str, "EntityClasses"] = {
-    "threat-actor": ThreatActor,
-    "intrusion-set": IntrusionSet,
-    "tool": Tool,
-    "attack-pattern": AttackPattern,
-    "malware": Malware,
-    "campaign": Campaign,
-    "entities": Entity,
-    "entity": Entity,
-    "company": Company,
-    "phone": Phone,
-    "note": Note,
-    "identity": Identity,
+class Investigation(Entity):
+    _type_filter: ClassVar[str] = EntityType.investigation
+    type: Literal[EntityType.investigation] = EntityType.investigation
+
+    reference: str = ""
+
+
+TYPE_MAPPING = {
+    'entities': Entity,
+    'entity': Entity,
+    EntityType.attack_pattern: AttackPattern,
+    EntityType.campaign: Campaign,
+    EntityType.company: Company,
+    EntityType.identity: Identity,
+    EntityType.intrusion_set: IntrusionSet,
+    EntityType.investigation: Investigation,
+    EntityType.malware: Malware,
+    EntityType.note: Note,
+    EntityType.phone: Phone,
+    EntityType.threat_actor: ThreatActor,
+    EntityType.tool: Tool,
 }
+
+
 REGEXES_ENTITIES = {
     EntityType.exploit: re.compile(
         r"(?P<pre>\W?)(?P<search>CVE-\d{4}-\d{4,7})(?P<post>\W?)"
     )
 }
-REGEXES_ENTITIES = [
-    (
-        EntityType.exploit,
-        re.compile(r"(?P<pre>\W?)(?P<search>CVE-\d{4}-\d{4,7})(?P<post>\W?)"),
-    ),
-]
+
+
 EntityTypes = (
-    ThreatActor
-    | IntrusionSet
-    | Tool
-    | Malware
+    AttackPattern
     | Campaign
-    | AttackPattern
-    | Identity
     | Company
-    | Phone
+    | Identity
+    | IntrusionSet
+    | Investigation
+    | Malware
     | Note
+    | Phone
+    | ThreatActor
+    | Tool
 )
+
+
 EntityClasses = (
-    Type[ThreatActor]
-    | Type[IntrusionSet]
-    | Type[Tool]
-    | Type[Malware]
+    Type[AttackPattern]
     | Type[Campaign]
-    | Type[AttackPattern]
-    | Type[Identity]
     | Type[Company]
-    | Type[Phone]
+    | Type[Identity]
+    | Type[IntrusionSet]
+    | Type[Investigation]
+    | Type[Malware]
     | Type[Note]
+    | Type[Phone]
+    | Type[ThreatActor]
+    | Type[Tool]
 )

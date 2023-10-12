@@ -1,18 +1,20 @@
 """Class implementing a YetiConnector interface for ArangoDB."""
 import datetime
 import json
+import logging
 import sys
 import time
-from typing import TYPE_CHECKING, Any, Iterable, List, Tuple, Type, TypeVar
+from typing import (TYPE_CHECKING, Any, Iterable, List, Optional, Tuple, Type,
+                    TypeVar)
 
 if TYPE_CHECKING:
     from core.schemas.graph import Relationship
     from core.schemas.graph import TagRelationship
-    from core.schemas.tag import Tag
 
 import requests
 from arango import ArangoClient
-from arango.exceptions import DocumentInsertError, DocumentUpdateError, GraphCreateError
+from arango.exceptions import (DocumentInsertError, DocumentUpdateError,
+                               GraphCreateError)
 from dateutil import parser
 
 from core.config.config import yeti_config
@@ -47,11 +49,11 @@ class ArangoDatabase:
         database: str = None,
     ):
 
-        host = host or yeti_config.arangodb.host
-        port = port or yeti_config.arangodb.port
-        username = username or yeti_config.arangodb.username
-        password = password or yeti_config.arangodb.password
-        database = database or yeti_config.arangodb.database
+        host = host or yeti_config.get('arangodb', 'host')
+        port = port or yeti_config.get('arangodb', 'port')
+        username = username or yeti_config.get('arangodb', 'username')
+        password = password or yeti_config.get('arangodb', 'password')
+        database = database or yeti_config.get('arangodb', 'database')
 
         host_string = f"http://{host}:{port}"
         client = ArangoClient(hosts=host_string)
@@ -62,11 +64,11 @@ class ArangoDatabase:
                 yeti_db = sys_db.has_database(database)
                 break
             except requests.exceptions.ConnectionError as e:
-                print("Connection error: {0:s}".format(str(e)))
-                print("Retrying in 5 seconds...")
+                logging.error("Connection error: {0:s}".format(str(e)))
+                logging.error("Retrying in 5 seconds...")
                 time.sleep(5)
         else:
-            print("Could not connect, bailing.")
+            logging.error("Could not connect, bailing.")
             sys.exit(1)
 
         if not yeti_db:
@@ -78,7 +80,7 @@ class ArangoDatabase:
             self.graph("tags"),
             {
                 "edge_collection": "tagged",
-                "from_vertex_collections": ["observables"],
+                "from_vertex_collections": ["observables", "entities", "indicators"],
                 "to_vertex_collections": ["tags"],
             },
         )
@@ -208,7 +210,8 @@ class ArangoYetiConnector(AbstractYetiConnector):
         because it may contain fields that are not JSON serializable by arango.
 
         Returns:
-          The created Yeti object."""
+          The created Yeti object.
+        """
         doc_dict = self.model_dump(exclude_unset=True)
         if doc_dict.get("id") is not None:
             result = self._update(self.model_dump_json())
@@ -287,15 +290,45 @@ class ArangoYetiConnector(AbstractYetiConnector):
         document["id"] = document.pop("_key")
         return cls.load(document)
 
-    # TODO: Consider extracting this to its own class, given it's only meant
-    # to be called by Observables.
-    def observable_tag(
-        self,
-        tag_name: str,
-        fresh: bool = True,
-        first_seen: datetime.datetime | None = None,
-        last_seen: datetime.datetime | None = None) -> "TagRelationship":
-        """Links an Observable to a Tag object.
+    def tag(
+        self: TYetiObject, tags: List[str], strict: bool = False, expiration_days: int | None = None
+    ) -> TYetiObject:
+        """Connects object to tag graph."""
+        # Import at runtime to avoid circular dependency.
+        from core.schemas.tag import DEFAULT_EXPIRATION_DAYS, Tag
+        expiration_days = expiration_days or DEFAULT_EXPIRATION_DAYS
+
+        if strict:
+            self.clear_tags()
+
+        extra_tags = set()
+        for tag_name in tags:
+            # Attempt to find replacement tag
+            replacements, _ = Tag.filter({"in__replaces": [tag_name]}, count=1)
+            tag: Optional[Tag] = None
+
+            if replacements:
+                tag = replacements[0]
+            # Attempt to find actual tag
+            else:
+                tag = Tag.find(name=tag_name)
+            # Create tag
+            if not tag:
+                tag = Tag(name=tag_name).save()
+
+            tag_link = self.link_to_tag(tag.name)
+            self.tags[tag.name] = tag_link
+
+            extra_tags |= set(tag.produces)
+
+        extra_tags -= set(tags)
+        if extra_tags:
+            self.tag(list(extra_tags))
+
+        return self
+
+    def link_to_tag(self, tag_name: str) -> "TagRelationship":
+        """Links a YetiObject to a Tag object.
 
         Args:
           tag_name: The name of the tag to link to.
@@ -309,7 +342,7 @@ class ArangoYetiConnector(AbstractYetiConnector):
 
         graph = self._db.graph("tags")
 
-        tags = self.observable_get_tags()
+        tags = self.get_tags()
 
         for tag_relationship, tag in tags:
             if tag.name != tag_name:
@@ -345,19 +378,16 @@ class ArangoYetiConnector(AbstractYetiConnector):
         result["id"] = result.pop("_key")
         return TagRelationship.load(result)
 
-    def observable_expire_tag(self, tag_name: str) -> "TagRelationship":
+    def expire_tag(self, tag_name: str) -> "TagRelationship":
         """Expires a tag on an Observable.
 
         Args:
           tag_name: The name of the tag to expire.
         """
         # Avoid circular dependency
-        from core.schemas.graph import TagRelationship
-        from core.schemas.tag import Tag
-
         graph = self._db.graph("tags")
 
-        tags = self.observable_get_tags()
+        tags = self.get_tags()
 
         for tag_relationship, tag in tags:
             if tag.name != tag_name:
@@ -372,12 +402,12 @@ class ArangoYetiConnector(AbstractYetiConnector):
             f"Tag '{tag_name}' not found on observable '{self.extended_id}'"
         )
 
-    def observable_clear_tags(self):
+    def clear_tags(self):
         """Clears all tags on an Observable."""
         # Avoid circular dependency
         graph = self._db.graph("tags")
 
-        tags = self.observable_get_tags()
+        tags = self.get_tags()
         results = graph.edge_collection("tagged").edges(self.extended_id)
         for edge in results["edges"]:
             graph.edge_collection("tagged").delete(edge["_id"])
@@ -443,7 +473,7 @@ class ArangoYetiConnector(AbstractYetiConnector):
 
     # TODO: Consider extracting this to its own class, given it's only meant
     # to be called by Observables.
-    def observable_get_tags(self) -> List[Tuple["TagRelationship", "Tag"]]:
+    def get_tags(self) -> List[Tuple["TagRelationship", "Tag"]]:
         """Returns the tags linked to this object.
 
         Returns:
@@ -473,6 +503,7 @@ class ArangoYetiConnector(AbstractYetiConnector):
         link_types: List[str] = [],
         target_types: List[str] = [],
         direction: str = "any",
+        graph: str = "links",
         include_original: bool = False,
         hops: int = 1,
         offset: int = 0,
@@ -500,6 +531,7 @@ class ArangoYetiConnector(AbstractYetiConnector):
         query_filter = ""
         args = {
             "extended_id": self.extended_id,
+            "@graph": graph,
         }
         if link_types:
             args["link_types_regex"] = "|".join(link_types)
@@ -515,7 +547,7 @@ class ArangoYetiConnector(AbstractYetiConnector):
                 limit += f", {count}"
 
         aql = f"""
-        FOR v, e, p IN 1..{hops} {direction} @extended_id links
+        FOR v, e, p IN 1..{hops} {direction} @extended_id @@graph
 
           {query_filter}
           LET v_with_tags = (
@@ -552,31 +584,30 @@ class ArangoYetiConnector(AbstractYetiConnector):
         """
         seen = {}
         for edge in edges:
-            if edge.id in seen:
-                seen_modified = parser.parse(seen[edge.id].modified)
-                current_modified = parser.parse(edge.modified)
-                if seen_modified > current_modified:
-                    continue
             seen[edge.id] = edge
         return list(seen.values())
 
-    def _build_edges(self, arango_edges) -> List["Relationship"]:
+    def _build_edges(self, arango_edges) -> List["graph.RelationshipTypes"]:
         # Avoid circular dependency
-        from core.schemas.graph import Relationship
-
+        from core.schemas import graph
         relationships = []
         for edge in arango_edges:
             edge["id"] = edge.pop("_key")
             edge["source"] = edge.pop("_from")
             edge["target"] = edge.pop("_to")
-            relationships.append(Relationship.load(edge))
+            if 'tagged' in edge['_id']:
+                relationships.append(graph.TagRelationship.load(edge))
+            else:
+                relationships.append(graph.Relationship.load(edge))
         return relationships
 
     def _build_vertices(self, vertices, arango_vertices):
         # Import happens here to avoid circular dependency
-        from core.schemas import entity, indicator, observable
+        from core.schemas import entity, indicator, observable, tag
 
-        type_mapping = {}
+        type_mapping = {
+            'tag': tag.Tag,
+        }
         type_mapping.update(observable.TYPE_MAPPING)
         type_mapping.update(entity.TYPE_MAPPING)
         type_mapping.update(indicator.TYPE_MAPPING)
@@ -584,7 +615,7 @@ class ArangoYetiConnector(AbstractYetiConnector):
         for vertex in arango_vertices:
             if vertex["_key"] in vertices:
                 continue
-            neighbor_schema = type_mapping[vertex["type"]]
+            neighbor_schema = type_mapping[vertex.get("type", "tag")]
             vertex["id"] = vertex.pop("_key")
             # We want the "extended ID" here, e.g. observables/12345
             vertices[vertex["_id"]] = neighbor_schema.load(vertex)
@@ -836,7 +867,6 @@ def tagged_observables_export(cls, args):
         FILTER COUNT(INTERSECTION(tagnames, @exclude)) == 0
         RETURN MERGE(o, {tags: tags})
         """
-    print(aql)
     documents = db.aql.execute(aql, bind_vars=args, count=True, full_count=True)
     results = []
     for doc in documents:

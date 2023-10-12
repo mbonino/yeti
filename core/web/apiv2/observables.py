@@ -2,29 +2,37 @@ import datetime
 from typing import Iterable
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict
 
+from core.schemas import graph
 from core.schemas.observable import Observable, ObservableType
-from core.schemas.tag import DEFAULT_EXPIRATION_DAYS, Tag
 
 
 # Request schemas
 class NewObservableRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
     value: str
     tags: list[str] = []
     type: ObservableType
 
 
 class NewBulkObservableAddRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
     observables: list[NewObservableRequest]
 
 
 class AddTextRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
     text: str
     tags: list[str] = []
 
 
 class AddContextRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
     source: str
     context: dict
     skip_compare: set = set()
@@ -35,6 +43,8 @@ class DeleteContextRequest(AddContextRequest):
 
 
 class ObservableSearchRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
     value: str | None = None
     # name: str | None = None
     type: ObservableType | None = None
@@ -44,14 +54,24 @@ class ObservableSearchRequest(BaseModel):
 
 
 class ObservableSearchResponse(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
     observables: list[Observable]
     total: int
 
 
 class ObservableTagRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
     ids: list[str]
     tags: list[str]
     strict: bool = False
+
+class ObservableTagResponse(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    tagged: int
+    tags: dict[str, dict[str, graph.TagRelationship]]
 
 
 # API endpoints
@@ -102,7 +122,7 @@ async def bulk_add(request: NewBulkObservableAddRequest) -> list[Observable]:
 async def details(observable_id) -> Observable:
     """Returns details about an observable."""
     observable = Observable.get(observable_id)
-    observable.observable_get_tags()
+    observable.get_tags()
     if not observable:
         raise HTTPException(status_code=404, detail="Observable not found")
     return observable
@@ -165,7 +185,7 @@ async def add_text(request: AddTextRequest) -> Observable:
 
 
 @router.post("/tag")
-async def tag_observable(request: ObservableTagRequest) -> dict:
+async def tag_observable(request: ObservableTagRequest) -> ObservableTagResponse:
     """Tags a set of observables, individually or in bulk."""
     observables = []
     for observable_id in request.ids:
@@ -177,20 +197,9 @@ async def tag_observable(request: ObservableTagRequest) -> dict:
             )
         observables.append(observable)
 
+    observable_tags = {}
     for observable in observables:
         observable.tag(request.tags, strict=request.strict)
+        observable_tags[observable.extended_id] = observable.tags
 
-    db_tags = []
-    for tag in request.tags:
-        db_tag = Tag.find(name=tag)
-        if db_tag:
-            db_tag.count += 1
-        else:
-            db_tag = Tag(
-                name=tag,
-                created=datetime.datetime.now(datetime.timezone.utc),
-                default_expiration=datetime.timedelta(days=DEFAULT_EXPIRATION_DAYS),
-            )
-        db_tag = db_tag.save()
-        db_tags.append(db_tag)
-    return {"tagged": len(observables), "tags": db_tags}
+    return ObservableTagResponse(tagged=len(observables), tags=observable_tags)

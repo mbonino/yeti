@@ -37,3 +37,5 @@ class TagRelationship(BaseModel, database_arango.ArangoYetiConnector):
     @classmethod
     def load(cls, object: dict):
         return cls(**object)
+
+RelationshipTypes = Relationship | TagRelationship
